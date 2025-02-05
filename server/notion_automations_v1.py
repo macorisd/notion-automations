@@ -1,6 +1,5 @@
 from datetime import datetime
-from typing import List
-from fastapi import APIRouter, HTTPException, Query, Request, Path
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 
