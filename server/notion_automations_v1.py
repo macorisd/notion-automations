@@ -22,6 +22,9 @@ load_dotenv()
 NOTION_TOKEN = os.getenv("MACO_NOTION_TOKEN")
 DATABASE_ID = os.getenv("MACO_MAPIR_DB_ID")
 
+# Expected daily work hours for calculating extra hours
+EXPECTED_DAILY_HOURS = 4
+
 notion = Client(auth=NOTION_TOKEN)
 
 @router.get("/" + endpoint_name + "/mapir/worked-hours", tags=["[Maco] MAPIR Endpoints"])
@@ -50,6 +53,7 @@ async def get_mapir_worked_hours(request: Request):
         response = notion.databases.query(database_id=DATABASE_ID)
 
         total_worked_minutes = 0
+        completed_days = 0  # Count only completed days
 
         for item in response["results"]:
             properties = item["properties"]
@@ -71,11 +75,13 @@ async def get_mapir_worked_hours(request: Request):
                 afternoon_minutes = calculate_time_difference(inicio_2_time, fin_2_time)
                 day_total_minutes = morning_minutes + afternoon_minutes
                 total_worked_minutes += day_total_minutes
+                completed_days += 1
                 
             # Case 2: Only first 2 fields filled - day concluded without breaks
             elif inicio_time and fin_time and not inicio_2_time and not fin_2_time:
                 day_total_minutes = calculate_time_difference(inicio_time, fin_time)
                 total_worked_minutes += day_total_minutes
+                completed_days += 1
                 
             # Case 3: Currently working (only Inicio or no fields filled)
             # Don't add to total as the day is not concluded
@@ -85,11 +91,38 @@ async def get_mapir_worked_hours(request: Request):
         total_minutes = total_worked_minutes % 60
         worked_hours_str = f"{total_hours}h {total_minutes}min"
 
+        # Calculate average per day
+        average_minutes_per_day = total_worked_minutes / completed_days if completed_days > 0 else 0
+        average_hours = int(average_minutes_per_day // 60)
+        average_minutes = int(average_minutes_per_day % 60)
+        average_per_day_str = f"{average_hours}h {average_minutes}min"
+
+        # Calculate extra hours (compared to expected daily hours)
+        expected_minutes = completed_days * EXPECTED_DAILY_HOURS * 60  # Expected hours per day in minutes
+        extra_minutes = total_worked_minutes - expected_minutes
+        
+        # Handle negative extra hours
+        if extra_minutes < 0:
+            extra_hours = abs(extra_minutes) // 60
+            extra_mins = abs(extra_minutes) % 60
+            extra_hours_str = f"-{extra_hours}h {extra_mins}min"
+        else:
+            extra_hours = extra_minutes // 60
+            extra_mins = extra_minutes % 60
+            extra_hours_str = f"{extra_hours}h {extra_mins}min"
+
         # Prepare the JSON response
         result = {
             "worked_hours_str": worked_hours_str,
             "worked_hours": total_hours,
             "worked_minutes": total_minutes,
+            "completed_days": completed_days,
+            "average_per_day_str": average_per_day_str,
+            "average_hours_per_day": average_hours,
+            "average_minutes_per_day": average_minutes,
+            "extra_hours_str": extra_hours_str,
+            "extra_hours": extra_hours if extra_minutes >= 0 else -extra_hours,
+            "extra_minutes": extra_mins if extra_minutes >= 0 else -extra_mins,
         }
 
         return JSONResponse(
