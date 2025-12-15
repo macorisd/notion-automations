@@ -54,6 +54,8 @@ async def get_mapir_worked_hours(request: Request):
 
         total_worked_minutes = 0
         completed_days = 0  # Count only completed days
+        extra_weekend_minutes = 0  # Track extra weekend hours
+        extra_completed_days = 0  # Count extra weekend days
 
         for item in response["results"]:
             properties = item["properties"]
@@ -69,19 +71,39 @@ async def get_mapir_worked_hours(request: Request):
             inicio_2_time = inicio_2["name"] if inicio_2 else None
             fin_2_time = fin_2["name"] if fin_2 else None
             
+            # Check if this is an extra weekend work entry
+            avances_property = properties.get("Avances", {})
+            avances = avances_property.get("title", [])  # Changed from "rich_text" to "title"
+            avances_text = ""
+            if avances and len(avances) > 0:
+                avances_text = avances[0].get("text", {}).get("content", "")
+            is_extra_weekend = avances_text.startswith("[EXTRA]")
+            
             # Case 1: All 4 fields filled - day concluded with lunch break
             if inicio_time and fin_time and inicio_2_time and fin_2_time:
                 morning_minutes = calculate_time_difference(inicio_time, fin_time)
                 afternoon_minutes = calculate_time_difference(inicio_2_time, fin_2_time)
                 day_total_minutes = morning_minutes + afternoon_minutes
                 total_worked_minutes += day_total_minutes
-                completed_days += 1
+                
+                # Add to extra weekend hours if applicable, but don't count as regular completed day
+                if is_extra_weekend:
+                    extra_weekend_minutes += day_total_minutes
+                    extra_completed_days += 1
+                else:
+                    completed_days += 1
                 
             # Case 2: Only first 2 fields filled - day concluded without breaks
             elif inicio_time and fin_time and not inicio_2_time and not fin_2_time:
                 day_total_minutes = calculate_time_difference(inicio_time, fin_time)
                 total_worked_minutes += day_total_minutes
-                completed_days += 1
+                
+                # Add to extra weekend hours if applicable, but don't count as regular completed day
+                if is_extra_weekend:
+                    extra_weekend_minutes += day_total_minutes
+                    extra_completed_days += 1
+                else:
+                    completed_days += 1
                 
             # Case 3: Currently working (only Inicio or no fields filled)
             # Don't add to total as the day is not concluded
@@ -97,19 +119,24 @@ async def get_mapir_worked_hours(request: Request):
         average_minutes = int(average_minutes_per_day % 60)
         average_per_day_str = f"{average_hours}h {average_minutes}min"
 
-        # Calculate extra hours (compared to expected daily hours)
+        # Calculate extra weekend hours
+        extra_weekend_hours = extra_weekend_minutes // 60
+        extra_weekend_mins = extra_weekend_minutes % 60
+        extra_worked_hours_str = f"{extra_weekend_hours}h {extra_weekend_mins}min"
+
+        # Calculate balance hours (compared to expected daily hours)
         expected_minutes = completed_days * EXPECTED_DAILY_HOURS * 60  # Expected hours per day in minutes
-        extra_minutes = total_worked_minutes - expected_minutes
+        balance_minutes = total_worked_minutes - expected_minutes
         
-        # Handle negative extra hours
-        if extra_minutes < 0:
-            extra_hours = abs(extra_minutes) // 60
-            extra_mins = abs(extra_minutes) % 60
-            extra_hours_str = f"-{extra_hours}h {extra_mins}min"
+        # Handle negative balance hours
+        if balance_minutes < 0:
+            balance_hours = abs(balance_minutes) // 60
+            balance_mins = abs(balance_minutes) % 60
+            balance_hours_str = f"-{balance_hours}h {balance_mins}min"
         else:
-            extra_hours = extra_minutes // 60
-            extra_mins = extra_minutes % 60
-            extra_hours_str = f"{extra_hours}h {extra_mins}min"
+            balance_hours = balance_minutes // 60
+            balance_mins = balance_minutes % 60
+            balance_hours_str = f"{balance_hours}h {balance_mins}min"
 
         # Prepare the JSON response
         result = {
@@ -120,9 +147,13 @@ async def get_mapir_worked_hours(request: Request):
             "average_per_day_str": average_per_day_str,
             "average_hours_per_day": average_hours,
             "average_minutes_per_day": average_minutes,
-            "extra_hours_str": extra_hours_str,
-            "extra_hours": extra_hours if extra_minutes >= 0 else -extra_hours,
-            "extra_minutes": extra_mins if extra_minutes >= 0 else -extra_mins,
+            "extra_worked_hours_str": extra_worked_hours_str,
+            "extra_worked_hours": extra_weekend_hours,
+            "extra_worked_minutes": extra_weekend_mins,
+            "extra_completed_days": extra_completed_days,
+            "balance_hours_str": balance_hours_str,
+            "balance_hours": balance_hours if balance_minutes >= 0 else -balance_hours,
+            "balance_minutes": balance_mins if balance_minutes >= 0 else -balance_mins,
         }
 
         return JSONResponse(
